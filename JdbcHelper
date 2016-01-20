@@ -1,0 +1,221 @@
+package com;
+
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+import javax.sql.RowSet;
+import javax.sql.rowset.CachedRowSet;
+//import com.sun.rowset.CachedRowSetImpl;
+
+import com.mchange.v2.c3p0.ComboPooledDataSource;
+
+public final class JdbcHelper {
+
+	/**
+	 * 从配置文件中取得连接池，从连接池中获取对象
+	 * @return 数据库连接
+	 */
+	private static synchronized Connection getConnection(){
+		try {
+			ComboPooledDataSource ds = new ComboPooledDataSource();
+			return ds.getConnection();
+		} catch (SQLException e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+	/**
+	 * 关闭数据库连接，释放资源。
+	 * @param conn
+	 * @param pstm
+	 * @param rs
+	 */
+	private static void close(Connection conn, PreparedStatement pstm, ResultSet rs){
+			try {
+				if(conn != null){
+					conn.close();
+				}
+				if(null != pstm){
+					pstm.close();
+				}
+				if(null != rs){
+					rs.close();
+				}
+			} catch (SQLException e) {
+				e.printStackTrace();
+			}
+	}
+	/**
+	 * 执行单个数据库操作 Insert/Update/Delete
+	 * @param sql
+	 * @param params
+	 * @return
+	 */
+	public static Integer executeUpdata(String sql, String[] params){
+		Connection conn = null;
+		PreparedStatement pstm = null;
+		
+		try {
+			conn = getConnection();
+			pstm = conn.prepareStatement(sql);
+			if(null != pstm){
+				for(int i=0; i<params.length; i++){
+					pstm.setString(i+1, params[i]);
+				}
+			}
+			return pstm.executeUpdate();
+		} catch (SQLException e) {
+			e.printStackTrace();
+			return -1;
+		}finally {
+			close(conn, pstm, null);
+		}
+	}
+	/**
+	 * 执行多个数据库操作，包含事务处理功能。
+	 * @param sqls
+	 * @param params
+	 * @return 如果事务执行成功返回1，如果事务执行失败返回-1。
+	 */
+	public static Integer executeUpdate(String[] sqls, String[][] params){
+		Connection conn = null;
+		PreparedStatement pstm = null;
+		
+		try {
+			conn = getConnection();
+			conn.setAutoCommit(false);
+			for(int i=0; i<sqls.length; i++){
+				pstm = conn.prepareStatement(sqls[i]);
+				if(null != params){
+					for(int j=0; j<params.length; j++){
+						pstm.setString(j+1, params[i][j]);
+					}
+				}
+				pstm.executeUpdate();
+			}
+			conn.commit();
+			return 1;
+		} catch (SQLException e) {
+			e.printStackTrace();
+			try {
+				conn.rollback();
+			} catch (SQLException e1) {
+				e1.printStackTrace();
+			}
+			return -1;
+		}finally {
+			close(conn, pstm, null);
+		}
+	}
+	
+	/**
+	 * 执行数据库查询操作
+	 * @param sql
+	 * @param params
+	 * @return 查询结果的离线RowSet
+	 */
+	@SuppressWarnings("restriction")
+	public static RowSet executeQuery(String sql, String[] params){
+		Connection conn = null;
+		PreparedStatement pstm = null;
+		ResultSet rs = null;
+		CachedRowSet cacheRs = null;  
+		
+		try {
+			conn = getConnection();
+			pstm = conn.prepareStatement(sql);
+			if(null != params){
+				for(int i=0; i<params.length; i++){
+					pstm.setString(i+1, params[i]);
+				}
+			}
+			rs = pstm.executeQuery();
+			cacheRs = new com.sun.rowset.CachedRowSetImpl();
+			cacheRs.populate(rs);
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}finally {
+			close(conn, pstm, rs);
+		}
+		return cacheRs;
+	}
+	
+	/**
+	 * 执行需要分布的数据库查询操作
+	 * @param sql
+	 * @param params
+	 * @param pageIndex
+	 * @param pageSize
+	 * @return 查询结果的离线RowSet
+	 */
+	@SuppressWarnings("restriction")
+	public static RowSet executeQuery(String sql,String[] params, Integer pageIndex, Integer pageSize){
+		Connection conn = null;
+		PreparedStatement pstm = null;
+		ResultSet rs = null;
+		CachedRowSet cacheRs = null;  
+		
+		try {
+			conn = getConnection();
+			//结果集是可滚动，但不可以修改。
+			pstm = conn.prepareStatement(sql,ResultSet.TYPE_SCROLL_INSENSITIVE,ResultSet.CONCUR_READ_ONLY);
+			if(null != params){
+				for(int i=0; i<params.length; i++){
+					pstm.setString(i+1, params[i]);
+				}
+			}
+			rs = pstm.executeQuery();
+			cacheRs = new com.sun.rowset.CachedRowSetImpl();
+			cacheRs.setPageSize(pageSize);
+			cacheRs.populate(rs,(pageIndex-1)*pageSize+1);
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}finally {
+			close(conn, pstm, rs);
+		}
+		return cacheRs;
+	}
+	
+	/**
+	 * 执行查询的存储过程 
+	 * @param sp_name
+	 * @param params
+	 * @return 返回查询结果的RowSet集合
+	 */
+	@SuppressWarnings("restriction")
+	public static RowSet executeStoredProcedure(String sp_name,String[] params){
+		Connection conn = null;
+		CallableStatement cstm = null;
+		ResultSet rs = null;
+		CachedRowSet cacheRs = null;  
+		
+		try {
+			conn = getConnection();
+			//结果集是可滚动，但不可以修改。
+			cstm = conn.prepareCall(sp_name);
+			if(null != params){
+				for(int i=0; i<params.length; i++){
+					cstm.setString(i+1, params[i]);
+				}
+			}
+			rs = cstm.executeQuery();
+			cacheRs = new com.sun.rowset.CachedRowSetImpl();
+			cacheRs.populate(rs);
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}finally {
+			close(conn, cstm, rs);
+		}
+		return cacheRs;
+	}
+	
+	
+	
+	public static void main(String[] args) {
+		new JdbcHelper();
+		System.out.println( JdbcHelper.getConnection());
+	}
+}
